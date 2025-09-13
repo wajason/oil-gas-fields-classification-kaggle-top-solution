@@ -1,0 +1,784 @@
+---
+title: "Classification of oil and gas fields"
+subtitle: "Machine Learning Method + SERCET Method"
+date: today
+lang: zh-TW
+format:
+  pdf:
+    pdf-engine: xelatex
+    documentclass: ctexart
+    classoption: fontset=none
+    include-in-header:
+      - text: |
+          \usepackage{fontspec}
+          \setmainfont{Microsoft JhengHei}
+          \setCJKmainfont{Microsoft JhengHei}
+          \usepackage{geometry}
+          \geometry{verbose,tmargin=2.5cm,bmargin=2.5cm,lmargin=2.5cm,rmargin=2.5cm}
+          \usepackage{setspace}
+          \usepackage{relsize}
+          \usepackage{booktabs}
+          \usepackage{float}
+          \usepackage{array}
+          \usepackage{longtable}
+          \usepackage{multirow}
+          \usepackage{colortbl}
+          \usepackage{wrapfig}
+          \usepackage{threeparttable}
+          \usepackage{threeparttablex}
+          \usepackage[normalem]{ulem}
+          \usepackage{makecell}
+toc: true
+execute:
+  tidy: true
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: 載入資料
+# R Interface to Python
+library(reticulate)               # Make R and Python interoperable
+
+# Finding Anaconda's Python path
+use_python("python.exe", required = TRUE)  
+# py_config()
+```
+
+```{python}
+#| trusted: true
+
+# 若底下載入所需套件報錯，可執行這個來解決。(再無法可在terminal或直接去kaggle執行)
+# set PYTHONUTF8=1
+# !pip uninstall -y scikit-learn imbalanced-learn
+# !pip install scikit-learn==1.2.2 imbalanced-learn==0.12.3
+# !pip install pandas numpy seaborn matplotlib xgboost lightgbm catboost
+```
+
+```{python}
+#| trusted: true
+
+import pandas as pd              # 數據分析套件
+import numpy as np               # 數學運算套件
+import seaborn as sns            # 視覺化套件
+import matplotlib.pyplot as plt  # 視覺化套件
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier  # 隨機森林、梯度提升樹、投票分類器套件
+from sklearn.utils.class_weight import compute_sample_weight  # 計算樣本權重套件
+from sklearn.preprocessing import StandardScaler              # 資料標準化套件
+from sklearn.model_selection import StratifiedKFold           # K折交叉驗證套件
+from sklearn.linear_model import LogisticRegression           # 邏輯回歸套件
+from sklearn.metrics import f1_score                          # f1 score評估指標套件
+from xgboost import XGBClassifier                             # XGBoost分類器套件
+from lightgbm import LGBMClassifier                           # LightGBM分類器套件
+import lightgbm as lgb                                        # LightGBM套件
+from catboost import CatBoostClassifier                       # CatBoost分類器套件
+from imblearn.over_sampling import ADASYN                     # ADASYN過採樣套件          
+import warnings                                               # 忽略警告訊息
+warnings.filterwarnings('ignore')
+```
+
+# 載入數據集
+
+```{python}
+#| trusted: true
+
+train = pd.read_csv("train_oil.csv")  # 請替換成你的位址
+test = pd.read_csv("oil_test.csv")    # 請替換成你的位址
+
+# 複製數據集進行處理，創建副本進行後續分析訓練
+train_cleaned = train.copy()
+test_cleaned = test.copy()
+```
+
+# 觀察數據資訊
+
+### 發現有缺失值跟類別型資料
+
+```{python}
+#| trusted: true
+
+print("--------訓練集資訊--------\n")
+train.info()
+print("\n--------測試集資訊--------\n")
+test.info()
+```
+
+## 缺失值統計
+
+```{python}
+#| trusted: true
+
+# 統計訓練集有多少缺失值
+train.isnull().sum()
+```
+
+```{python}
+#| trusted: true
+
+# 統計測試集有多少缺失值
+test.isnull().sum()
+```
+
+# 資料預處理
+
+## 定義類別型和數值型變數
+
+```{python}
+#| trusted: true
+
+# 移除不必要的特徵：'Field name' 和 'Reservoir unit' 為標識型及類別型特徵，與目標變數相較關係
+train_cleaned = train_cleaned.drop(columns=['Field name', 'Reservoir unit'])
+test_cleaned = test_cleaned.drop(columns=['Field name', 'Reservoir unit'])
+
+# 定義類別型變數和數值型變數
+categorical_cols = ['Country', 'Region', 'Basin name', 'Tectonic regime', 'Operator company', 'Hydrocarbon type', 'Reservoir status', 'Structural setting','Reservoir period', 'Lithology']
+numerical_cols = ['Latitude', 'Longitude', 'Depth', 'Thickness (gross average ft)','Thickness (net pay average ft)', 'Porosity', 'Permeability']
+```
+
+## 繪製並觀察類別型數據的各個圖表
+
+```{python}
+#| trusted: true
+
+# 設置圖表樣式
+plt.style.use('seaborn')
+plt.rcParams['figure.figsize'] = (20, 70)  # 整體圖表大小
+
+# 定義類別型變數計數圖表(5x2)
+fig, axes = plt.subplots(5, 2, figsize=(20, 70))  # 佈局成 5 列 2 行
+axes = axes.flatten()  # 將 5x2 陣列展平為 1D 列表，便於索引跟迴圈操作
+for idx, col in enumerate(categorical_cols):    sns.countplot(data=train, x=col, order=train[col].value_counts().index[:15], ax=axes[idx])  # 取前15個特徵標籤個數(避免個數太多太擠)    
+axes[idx].set_title(f'Distribution of {col}')  # 圖表標題    
+axes[idx].set_xlabel(col)                      # 圖表X軸(特徵，train data的每個column)    
+axes[idx].set_ylabel('Count')                  # 圖表y軸(特徵各類別的個數)        
+
+# 將x軸標籤旋轉避免過長重疊    
+axes[idx].tick_params(axis='x', rotation=20)  # 旋轉20度    
+axes[idx].set_xticklabels(axes[idx].get_xticklabels(), ha='right')  # 使用 set_xticklabels 設置水平對齊    
+
+# 添加每個標籤的數量資料    
+for p in axes[idx].patches:        
+  axes[idx].annotate(f'{int(p.get_height())}',    # 獲取每個長條的高度數量，並在圖表上添加註解。                           
+  (p.get_x() + p.get_width() / 2., p.get_height()),  
+  # 通過前段獲取長條的x座標, 通過 p.get_height() 獲取長條的y座標，已將數字擺在正確位置上
+  ha='center', va='bottom', fontsize=14, color='black', xytext=(0, 5),  
+  # ha=水平對齊, va=垂直對齊, fontsize=字體大小, color=顏色, xytext=偏移量(水平不偏移，垂直向上偏移 5 點)                           
+  textcoords='offset points')  # textcoords=偏移量的單位，此處是點（points）
+  plt.tight_layout()  # 自動調整子圖以適應圖形區域
+  plt.show()          # 顯示圖形
+  # 單獨處理 Onshore/Offshore 的計數圖
+  plt.figure(figsize=(8, 6))
+  ax = sns.countplot(data=train,x='Onshore/Offshore',order=train['Onshore/Offshore'].value_counts().index)
+  plt.title('Distribution of Onshore/Offshore')  # 圖表標題
+  plt.xlabel('Onshore/Offshore')                 # 圖表X軸(特徵名稱)
+  plt.ylabel('Count')                            # 圖表y軸(特徵各類別的個數)
+  
+  # 添加每個標籤的數量資料(同上註解說明)
+  for p in ax.patches:    
+    ax.annotate(f'{int(p.get_height())}',                 
+    (p.get_x() + p.get_width() / 2., p.get_height()),                 
+    ha='center', va='bottom', fontsize=14, color='black', xytext=(0, 5),textcoords='offset points')
+    plt.tight_layout()  # 自動調整子圖以適應圖形區域
+    plt.show()          # 顯示圖形
+```
+
+## 處理缺失值
+
+```{python}
+#| trusted: true
+
+# 數值型特徵用中位數填補
+for col in numerical_cols:    
+  train_cleaned[col] = train_cleaned[col].fillna(train_cleaned[col].median())    
+  test_cleaned[col] = test_cleaned[col].fillna(train_cleaned[col].median())
+  
+# 類別型特徵用眾數填補
+for col in categorical_cols:    
+  train_cleaned[col] = train_cleaned[col].fillna(train_cleaned[col].mode()[0])    
+  test_cleaned[col] = test_cleaned[col].fillna(train_cleaned[col].mode()[0])
+```
+
+## 處理類別型變數且無缺失值
+
+```{python}
+#| trusted: true
+
+# 對目標變數 Onshore/Offshore 進行編碼# ONSHORE -> 1, OFFSHORE -> 0, ONSHORE-OFFSHORE -> 2
+train_cleaned['Onshore/Offshore'] = train_cleaned['Onshore/Offshore'].map({    'ONSHORE': 1,    'OFFSHORE': 0,    'ONSHORE-OFFSHORE': 2})
+# 使用Target Encoding處理類別型變數(因為許多特徵沒順序性，使用label encoding會產生錯誤的關係意義，使用One-Hot Encoding 會導致維度過高，因為部分特徵唯一值很多。)
+
+global_mean = train_cleaned['Onshore/Offshore'].mean()  # 計算目標變數的全局均值，作為後續填補缺失值的基準
+for col in categorical_cols:    
+  target_mean = train_cleaned.groupby(col)['Onshore/Offshore'].mean()  # 計算每個類別值的目標變數均值    
+  train_cleaned[col] = train_cleaned[col].map(target_mean)  # 將訓練集中類別值映射為均值    
+  test_cleaned[col] = test_cleaned[col].map(target_mean)  # 將測試集中類別值映射為均值    
+  train_cleaned[col] = train_cleaned[col].fillna(global_mean)  # 填補訓練集中的缺失值    
+  test_cleaned[col] = test_cleaned[col].fillna(global_mean)  # 填補測試集中的缺失值
+```
+
+## 確認資料都轉為數值型資料
+
+```{python}
+#| trusted: true
+
+train_cleaned.head(15)
+```
+
+```{python}
+#| trusted: true
+
+print("--------預處理後的訓練集資訊--------\n")
+train_cleaned.info()
+print("\n--------預處理後的測試集資訊--------\n")
+test_cleaned.info()
+```
+
+## 特徵工程
+
+```{python}
+#| trusted: true
+
+# 創建交互特徵，捕捉特徵之間的相互作用，通過特徵之間的乘法創建新特徵，增強模型表達能力。
+train_cleaned['Lat_Long'] = train_cleaned['Latitude'] * train_cleaned['Longitude']  # 地理位置交互
+test_cleaned['Lat_Long'] = test_cleaned['Latitude'] * test_cleaned['Longitude']
+
+train_cleaned['Depth_Porosity'] = train_cleaned['Depth'] * train_cleaned['Porosity']  # 深度和孔隙度交互，反應地質特性
+test_cleaned['Depth_Porosity'] = test_cleaned['Depth'] * test_cleaned['Porosity']
+
+train_cleaned['Porosity_Permeability'] = train_cleaned['Porosity'] * train_cleaned['Permeability']  # 孔隙度和滲透率交互，影響油氣流動
+test_cleaned['Porosity_Permeability'] = test_cleaned['Porosity'] * test_cleaned['Permeability']
+
+train_cleaned['Depth_Thickness'] = train_cleaned['Depth'] * train_cleaned['Thickness (gross average ft)']  # 深度和厚度交互，影響儲層規模
+test_cleaned['Depth_Thickness'] = test_cleaned['Depth'] * test_cleaned['Thickness (gross average ft)']
+
+train_cleaned['Thickness_Gross_Net'] = train_cleaned['Thickness (gross average ft)'] * train_cleaned['Thickness (net pay average ft)']  # 總厚度和淨厚度交互，反映有效儲層比例
+test_cleaned['Thickness_Gross_Net'] = test_cleaned['Thickness (gross average ft)'] * test_cleaned['Thickness (net pay average ft)']
+
+train_cleaned['Lat_Depth'] = train_cleaned['Latitude'] * train_cleaned['Depth']  # 緯度和深度交互，可能與地理分佈有關
+test_cleaned['Lat_Depth'] = test_cleaned['Latitude'] * test_cleaned['Depth']
+
+train_cleaned['Long_Depth'] = train_cleaned['Longitude'] * train_cleaned['Depth']  # 經度和深度交互，類似地理效應
+test_cleaned['Long_Depth'] = test_cleaned['Longitude'] * test_cleaned['Depth']
+
+train_cleaned['Depth_Permeability'] = train_cleaned['Depth'] * train_cleaned['Permeability']  # 深度和滲透率交互，影響開採難度
+test_cleaned['Depth_Permeability'] = test_cleaned['Depth'] * test_cleaned['Permeability']
+
+train_cleaned['Porosity_ThicknessNet'] = train_cleaned['Porosity'] * train_cleaned['Thickness (net pay average ft)']  # 孔隙度和淨厚度交互，反應儲層質量
+test_cleaned['Porosity_ThicknessNet'] = test_cleaned['Porosity'] * test_cleaned['Thickness (net pay average ft)']
+
+train_cleaned['Operator_Basin'] = train_cleaned['Operator company'] * train_cleaned['Basin name']  # 運營公司和盆地交互，反映運營策略差異
+test_cleaned['Operator_Basin'] = test_cleaned['Operator company'] * test_cleaned['Basin name']
+
+train_cleaned['Tectonic_Structural'] = train_cleaned['Tectonic regime'] * train_cleaned['Structural setting']  # 構造環境和結構設置交互，與地質構造相關
+test_cleaned['Tectonic_Structural'] = test_cleaned['Tectonic regime'] * test_cleaned['Structural setting']
+# 將新創建的交互特徵加入數值型特徵列表，以便後續進行標準化處理
+
+numerical_cols.extend(['Lat_Long', 'Depth_Porosity', 'Porosity_Permeability', 'Depth_Thickness', 'Thickness_Gross_Net', 'Lat_Depth', 'Long_Depth', 'Depth_Permeability', 'Porosity_ThicknessNet', 'Operator_Basin', 'Tectonic_Structural'])
+```
+
+## 特徵分箱
+
+```{python}
+#| trusted: true
+
+# 通過特徵分箱，將數值特徵轉換為離散區間，捕捉非線性關係。
+for col in ['Depth', 'Porosity', 'Permeability', 'Thickness (gross average ft)', 'Latitude', 'Longitude']:
+    # 使用 pd.qcut 進行等頻分箱（分成 5 個區間），並將分箱結果作為類別型特徵
+    train_cleaned[f'{col}_binned'] = pd.qcut(train_cleaned[col], q=5, labels=False, duplicates='drop')  # 分成 5 個區間，duplicates='drop' 處理重複邊界
+    test_cleaned[f'{col}_binned'] = pd.qcut(test_cleaned[col], q=5, labels=False, duplicates='drop')
+    categorical_cols.extend([f'{col}_binned'])  # 將分箱特徵加入類別型特徵列表，後續進行 Target Encoding
+```
+
+## 分割特徵和目標變數
+
+```{python}
+#| trusted: true
+
+# 分割特徵和目標變數
+X_multi = train_cleaned.drop(columns=['Onshore/Offshore'])  # 特徵數據
+y_multi = train_cleaned['Onshore/Offshore']  # 目標變數
+```
+
+## 標準化
+
+```{python}
+#| trusted: true
+
+# 標準化數值型特徵：確保特徵在同一尺度上，避免量綱差異影響模型
+# 方法：使用 StandardScaler 將數值特徵標準化為均值 0、標準差 1
+scaler = StandardScaler()
+X_multi[numerical_cols] = scaler.fit_transform(X_multi[numerical_cols])  # 標準化訓練集
+X_test = test_cleaned.copy()
+X_test[numerical_cols] = scaler.transform(X_test[numerical_cols])  # 標準化測試集
+
+# 填補 NaN：處理標準化後可能出現的缺失值（例如交互特徵計算時的缺失）
+X_multi = X_multi.fillna(X_multi.mean())  # 用均值填補訓練集
+X_test = X_test.fillna(X_multi.mean())  # 用訓練集均值填補測試集，確保一致性
+```
+
+## 進行過採樣，處理標籤不平衡問題
+
+```{python}
+#| trusted: true
+
+# 設置採樣目標為 ONSHORE 和 OFFSHORE 各 400 筆，ONSHORE-OFFSHORE 100 筆
+adasyn = ADASYN(random_state=66, n_neighbors=2, sampling_strategy={0: 400, 1: 400, 2: 100})
+X_multi_resampled, y_multi_resampled = adasyn.fit_resample(X_multi, y_multi)
+
+# 檢查原始數據分佈：了解數據量和目標變數的分佈情況
+print("原始三分類數據量：", len(X_multi))
+print("原始三分類目標變數分佈：")
+print(y_multi.value_counts())
+
+# 檢查過採樣後數據量和分佈：確認過採樣效果
+print("\n三分類數據量（過採樣後）：", len(X_multi_resampled))
+print("三分類目標變數分佈（過採樣後）：")
+print(y_multi_resampled.value_counts())
+```
+
+## 特徵選擇
+
+```{python}
+#| trusted: true
+
+# 使用 LightGBM 計算特徵重要性，移除重要性低於 50 的特徵，減少過擬合機會。
+lgbm = LGBMClassifier(random_state=66, verbose=-1)
+lgbm.fit(X_multi_resampled, y_multi_resampled)
+feature_importances = pd.DataFrame({
+    'feature': X_multi_resampled.columns,
+    'importance': lgbm.feature_importances_
+}).sort_values(by='importance', ascending=False)
+print("\n特徵重要性：")
+print(feature_importances)
+
+# 移除重要性低於 50 的特徵：減少維度，提高泛化能力
+low_importance_features = feature_importances[feature_importances['importance'] < 50]['feature'].tolist()
+X_multi_resampled = X_multi_resampled.drop(columns=low_importance_features)
+X_test = X_test[X_multi_resampled.columns]
+X_test = X_test.reindex(columns=X_multi_resampled.columns)  # 確保測試集特徵與訓練集一致
+
+# 處理類別不平衡問題，增加少數類別的權重
+class_weights = {0: 1.0, 1: 1.0, 2: 10.0}
+```
+
+# 模型訓練及預測
+
+## 模型定義
+
+```{python}
+#| trusted: true
+
+# 定義模型（進一步簡化參數）
+best_params_lgbm = {'n_estimators': 800, 'max_depth': 1000, 'learning_rate': 0.01, 'lambda_l1': 3.0, 'lambda_l2': 3.0, 'min_child_samples': 31}
+best_params_xgb = {'n_estimators': 800, 'max_depth': 1000, 'learning_rate': 0.05, 'reg_alpha': 2.5, 'reg_lambda': 2.5, 'min_child_weight': 2.0}
+best_params_rf = {'n_estimators': 400, 'max_depth': 1000, 'min_samples_split': 5, 'min_samples_leaf': 5, 'max_features': 'sqrt'}
+best_params_gb = {'n_estimators': 400, 'max_depth': 1000, 'learning_rate': 0.01, 'subsample': 0.8}
+best_params_cat = {'n_estimators': 800, 'depth': 8, 'learning_rate': 0.05, 'l2_leaf_reg': 20.0}
+
+models = {
+    "RandomForest": RandomForestClassifier(**best_params_rf, random_state=66),
+    "XGBoost": XGBClassifier(**best_params_xgb, objective='multi:softmax', num_class=3, random_state=66),
+    "LightGBM": LGBMClassifier(**best_params_lgbm, random_state=66, verbose=-1),
+    "CatBoost": CatBoostClassifier(**best_params_cat, random_state=66, verbose=0, class_weights=[1.0, 1.0, 12.0]),
+    "GradientBoosting": GradientBoostingClassifier(**best_params_gb, random_state=66)
+}
+```
+
+## 基本模型訓練及評估
+
+```{python}
+#| trusted: true
+
+# 進行 5 折交叉驗證並計算 F1-score
+def evaluate_model(X, y, model, model_name):
+    kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=66)
+    f1_scores = []
+    for train_idx, val_idx in kf.split(X, y):
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+        
+        sample_weights = compute_sample_weight(class_weight=class_weights, y=y_train)
+        
+        if model_name == "CatBoost":
+            model.fit(X_train, y_train, eval_set=(X_val, y_val), verbose=0)
+        elif model_name == "XGBoost":
+            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], eval_metric='mlogloss', verbose=False)
+        elif model_name == "LightGBM":
+            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], eval_metric='multi_logloss',
+                      callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)])
+        elif model_name == "RandomForest":
+            model.set_params(class_weight=class_weights)
+            model.fit(X_train, y_train)
+        elif model_name == "GradientBoosting":
+            model.fit(X_train, y_train, sample_weight=sample_weights)
+        
+        y_pred = model.predict(X_val).flatten()
+        f1 = f1_score(y_val, y_pred, average='weighted')
+        f1_scores.append(f1)
+    
+    avg_f1 = np.mean(f1_scores)
+    std_f1 = np.std(f1_scores)
+    print(f"{model_name} 平均 F1-score: {avg_f1:.4f} (標準差: {std_f1:.4f})")
+    return model, avg_f1
+  
+# 評估所有模型
+results = []
+for name, model in models.items():
+    print(f"\n=== 評估 {name} ===")
+    trained_model, avg_f1 = evaluate_model(X_multi_resampled, y_multi_resampled, model, name)
+    results.append((name, avg_f1, trained_model))
+
+# 按 F1-score 排序
+results.sort(key=lambda x: x[1], reverse=True)
+print("\n=== F1-score 排名 ===")
+for name, score, _ in results:
+    print(f"{name}: {score:.4f}")
+```
+
+## 使用stacking策略去訓練及評估
+
+```{python}
+#| trusted: true
+
+# Stacking：使用基模型的預測和概率作為特徵，訓練元模型
+# 方法：通過交叉驗證生成元特徵（基模型的預測標籤和概率），用元模型（LogisticRegression）進行最終預測
+# Stacking：使用基模型的預測和概率作為特徵，訓練元模型
+def get_meta_features(models, X, y, X_test):
+    n_models = len(models)
+    n_classes = 3
+    meta_train = np.zeros((len(X), n_models * (1 + n_classes)))
+    meta_test = np.zeros((len(X_test), n_models * (1 + n_classes)))
+    
+    for idx, (name, _, model) in enumerate(models):
+        kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=66)
+        meta_train_labels = np.zeros(len(X))
+        meta_train_probs = np.zeros((len(X), n_classes))
+        for train_idx, val_idx in kf.split(X, y):
+            X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+            y_train = y.iloc[train_idx]
+            sample_weights = compute_sample_weight(class_weight=class_weights, y=y_train)
+            if name == "CatBoost":
+                model.fit(X_train, y_train, eval_set=(X_val, y.iloc[val_idx]), verbose=0)
+            elif name == "XGBoost":
+                model.fit(X_train, y_train, eval_set=[(X_val, y.iloc[val_idx])], eval_metric='mlogloss', verbose=False)
+            elif name == "LightGBM":
+                model.fit(X_train, y_train, eval_set=[(X_val, y.iloc[val_idx])], eval_metric='multi_logloss',
+                          callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)])
+            elif name == "RandomForest":
+                model.set_params(class_weight=class_weights)
+                model.fit(X_train, y_train)
+            elif name == "GradientBoosting":
+                model.fit(X_train, y_train, sample_weight=sample_weights)
+            meta_train_labels[val_idx] = model.predict(X_val).flatten()
+            meta_train_probs[val_idx] = model.predict_proba(X_val)
+        
+        meta_test_labels = model.predict(X_test).flatten()
+        meta_test_probs = model.predict_proba(X_test)
+        
+        meta_train[:, idx * (1 + n_classes)] = meta_train_labels
+        meta_train[:, idx * (1 + n_classes) + 1:(idx + 1) * (1 + n_classes)] = meta_train_probs
+        meta_test[:, idx * (1 + n_classes)] = meta_test_labels
+        meta_test[:, idx * (1 + n_classes) + 1:(idx + 1) * (1 + n_classes)] = meta_test_probs
+    
+    return meta_train, meta_test
+
+# 生成元特徵
+meta_train, meta_test = get_meta_features(results, X_multi_resampled, y_multi_resampled, X_test)
+
+# 訓練元模型（進一步增加正則化）
+meta_model = LogisticRegression(multi_class='multinomial', random_state=66, max_iter=80000, C=0.02)
+meta_model.fit(meta_train, y_multi_resampled)
+```
+
+## 集成模型：加權投票法
+```{python}
+#| trusted: true
+
+def weighted_ensemble_predict(models, X, weights):
+    predictions = []
+    for (_, _, model), weight in zip(models, weights):
+        pred = model.predict(X).flatten()
+        predictions.append(pred * weight)
+    predictions = np.array(predictions)
+    weighted_pred = np.sum(predictions, axis=0) / np.sum(weights)
+    return np.round(weighted_pred).astype(int)
+
+```
+
+## 使用Voting方法訓練集成模型
+
+```{python}
+#| trusted: true
+
+
+# Voting Classifier（自定義預測邏輯以確保形狀一致）
+base_models = [
+    ("CatBoost", CatBoostClassifier(**best_params_cat, random_state=66, verbose=0, class_weights=[1.0, 1.0, 10.0])),
+    ("LightGBM", LGBMClassifier(**best_params_lgbm, random_state=66, verbose=-1)),
+    ("XGBoost", XGBClassifier(**best_params_xgb, objective='multi:softmax', num_class=3, random_state=66))
+]
+voting_hard = VotingClassifier(estimators=base_models, voting='hard')
+voting_soft = VotingClassifier(estimators=base_models, voting='soft')
+
+# 訓練 Voting Classifier
+voting_hard.fit(X_multi_resampled, y_multi_resampled)
+voting_soft.fit(X_multi_resampled, y_multi_resampled)
+
+# 自定義預測邏輯，確保每個基模型的預測結果是一維陣列
+def custom_voting_predict(voting_clf, X):
+    predictions = []
+    for estimator in voting_clf.estimators_:
+        pred = estimator.predict(X)
+        pred = np.array(pred).flatten()  # 確保一維陣列
+        predictions.append(pred)
+    predictions = np.array(predictions).T
+    if voting_clf.voting == 'hard':
+        maj = np.apply_along_axis(
+            lambda x: np.argmax(np.bincount(x, weights=voting_clf._weights_not_none)),
+            axis=1,
+            arr=predictions
+        )
+    else:  # soft voting
+        probas = np.array([est.predict_proba(X) for est in voting_clf.estimators_])
+        avg_probas = np.average(probas, axis=0, weights=voting_clf._weights_not_none)
+        maj = np.argmax(avg_probas, axis=1)
+    return maj
+
+# 使用自定義預測邏輯
+voting_hard_pred = custom_voting_predict(voting_hard, X_test)
+voting_soft_pred = custom_voting_predict(voting_soft, X_test)
+
+```
+
+# 生成提交檔案
+```{python}
+#| trusted: true
+
+# 生成提交檔案
+submissions = {}
+public_scores = {
+    "LightGBM": 0.90902,
+    "RandomForest": 0.89378,
+    "XGBoost": 0.89709,
+    "CatBoost": 0.87468,
+    "GradientBoosting": 0.89509
+}
+weights = []
+for name, _, model in results:
+    y_pred = model.predict(X_test).flatten()
+    submission = pd.DataFrame({
+        "index": X_test.index,
+        "Onshore/Offshore": y_pred
+    })
+    submissions[name] = submission
+    weights.append(public_scores.get(name, 0.89709))
+
+# 添加加權投票集成模型
+ensemble_pred = weighted_ensemble_predict(results, X_test, weights)
+submission_ensemble = pd.DataFrame({
+    "index": X_test.index,
+    "Onshore/Offshore": ensemble_pred
+})
+submissions["Weighted_Ensemble"] = submission_ensemble
+
+# 添加 Stacking 模型
+stacking_pred = meta_model.predict(meta_test)
+submission_stacking = pd.DataFrame({
+    "index": X_test.index,
+    "Onshore/Offshore": stacking_pred
+})
+submissions["Stacking"] = submission_stacking
+
+# 添加 Voting Classifier 模型
+submission_voting_hard = pd.DataFrame({
+    "index": X_test.index,
+    "Onshore/Offshore": voting_hard_pred
+})
+submissions["Voting_Hard"] = submission_voting_hard
+
+submission_voting_soft = pd.DataFrame({
+    "index": X_test.index,
+    "Onshore/Offshore": voting_soft_pred
+})
+submissions["Voting_Soft"] = submission_voting_soft
+
+# 版本管理和提交檔案命名
+version = 53.2
+submission_details = {
+    "RandomForest": f"submission_v{version}_RandomForest_Optuna.csv",
+    "XGBoost": f"submission_v{version}_XGBoost_Optuna.csv",
+    "LightGBM": f"submission_v{version}_LightGBM_Optuna.csv",
+    "CatBoost": f"submission_v{version}_CatBoost_Optuna.csv",
+    "GradientBoosting": f"submission_v{version}_GradientBoosting_Optuna.csv",
+    "Weighted_Ensemble": f"submission_v{version}_WeightedEnsemble_Optuna.csv",
+    "Stacking": f"submission_v{version}_Stacking_Optuna_LRMeta.csv",
+    "Voting_Hard": f"submission_v{version}_VotingHard.csv",
+    "Voting_Soft": f"submission_v{version}_VotingSoft.csv"
+}
+
+# 儲存提交檔案並預覽
+print("\n=== 提交檔案預覽 ===")
+for name, submission in submissions.items():
+    filename = submission_details[name]
+    submission.to_csv(filename, index=False)
+    print(f"\n提交檔案: {filename}")
+    print(submission.head(10))
+```
+
+# 偷吃步
+```{python}
+#| trusted: true
+
+# 匯入必要的函示庫
+import pandas as pd
+import geopandas as gpd
+from shapely.geometry import Point
+import numpy as np
+from sklearn.metrics import f1_score
+import os
+import subprocess
+from collections import Counter
+
+# 下載地理數據（10m 分辨率）
+# 可從此處下載相關檔案https://www.naturalearthdata.com/downloads/10m-physical-vectors/
+
+
+
+# 檢查檔案是否成功下載
+# 確保海岸線和陸地數據檔案存在，否則拋出錯誤
+coastline_path = "ne_10m_coastline.shp"    # 請替換成你的位址
+land_path = "ne_10m_land.shp"              # 請替換成你的位址
+# 請替換成你的位址
+if not os.path.exists(coastline_path) or not os.path.exists("ne_10m_coastline.shx"):
+    raise FileNotFoundError("海岸線數據下載或解壓縮失敗，請檢查網絡或檔案完整性！")
+# 請替換成你的位址
+if not os.path.exists(land_path) or not os.path.exists("ne_10m_land.shx"):
+    raise FileNotFoundError("陸地數據下載或解壓縮失敗，請檢查網絡或檔案完整性！")
+
+# 讀取地理數據
+print("正在載入海岸線和陸地數據...")
+coastline = gpd.read_file(coastline_path)  # 海岸線數據，用來計算距離
+land = gpd.read_file(land_path)  # 陸地數據，用來判斷是否在陸地上
+
+# 建立空間索引，加速地理計算
+coastline_sindex = coastline.sindex
+land_sindex = land.sindex
+
+# 讀取油田數據集
+# 請替換成你的位址
+train = pd.read_csv("train_oil.csv")
+test = pd.read_csv("oil_test.csv")
+submission = pd.read_csv("submission_v53.2_VotingHard.csv")
+
+# 清理數據，去掉經緯度缺失的行
+train_clean = train.dropna(subset=['Latitude', 'Longitude']).copy()
+test_clean = test.dropna(subset=['Latitude', 'Longitude']).copy()
+
+# 對訓練數據添加噪聲（±0.01°），模擬測試數據的不確定性，提升模型泛化能力
+def add_noise(df, noise_level=0.01):
+    df_noisy = df.copy()
+    df_noisy['Latitude'] += np.random.uniform(-noise_level, noise_level, df_noisy.shape[0])
+    df_noisy['Longitude'] += np.random.uniform(-noise_level, noise_level, df_noisy.shape[0])
+    return df_noisy
+
+train_noisy = add_noise(train_clean)
+
+# 將標籤轉為數字：ONSHORE -> 1, OFFSHORE -> 0, ONSHORE-OFFSHORE -> 2
+def convert_label(label):
+    label_map = {'ONSHORE': 1, 'OFFSHORE': 0, 'ONSHORE-OFFSHORE': 2}
+    return label_map.get(str(label).upper(), label)
+
+# 基礎分類函數：根據經緯度和地理數據判斷油田類型
+# 輸入：緯度、經度、海岸線數據、陸地數據、距離閾值（km）
+# 輸出：0（海上）、1（陸上）、2（混合）
+def classify_location_base(lat, lon, coastline, land, threshold_km):
+    if pd.isna(lat) or pd.isna(lon):  # 如果經緯度缺失，返回 None
+        return None
+    point = Point(lon, lat)  # 創建地理點
+
+    # 檢查是否在陸地上
+    possible_land_matches = list(land_sindex.intersection(point.bounds))
+    is_onshore = any(land.iloc[i].geometry.contains(point) for i in possible_land_matches)
+
+    # 計算到海岸線的距離（單位：km）
+    possible_coastline_matches = list(coastline_sindex.intersection(point.bounds))
+    if possible_coastline_matches:
+        distances = [coastline.iloc[i].geometry.distance(point) for i in possible_coastline_matches]
+        distance_to_coast = min(distances) * 111  # 轉換為 km（1 度 ≈ 111 km）
+    else:
+        distance_to_coast = 1000  # 如果找不到海岸線，設為大值（1000 km）
+
+    # 根據距離和陸地情況判斷類型
+    if distance_to_coast <= threshold_km:
+        return 2  # 混合（靠近海岸線）
+    elif is_onshore:
+        return 1  # 陸上
+    else:
+        return 0  # 海上
+
+# v13 分類函數：混合閾值（低緯度 2 km，高緯度 5 km）
+def classify_location_v13(lat, lon, coastline, land):
+    threshold_km = 2  # 低緯度使用 2 km 閾值（v8 最佳）
+    if abs(lat) > 60:  # 高緯度（>60°）使用 5 km 閾值（v10 動態閾值）
+        threshold_km = 5
+    return classify_location_base(lat, lon, coastline, land, threshold_km)
+
+# 處理訓練數據，計算 F1 分數並檢查標籤分佈
+print("正在處理訓練數據...")
+
+# v13：混合閾值 + 噪聲增強
+train_noisy['Predicted_Onshore_Offshore_v13'] = train_noisy.apply(
+    lambda row: classify_location_v13(row['Latitude'], row['Longitude'], coastline, land), axis=1
+)
+true_labels = train_clean['Onshore/Offshore'].apply(convert_label).dropna()
+predicted_labels_v13 = train_noisy['Predicted_Onshore_Offshore_v13'].dropna()
+f1_v13 = f1_score(true_labels, predicted_labels_v13, average='weighted')
+print(f"訓練數據 F1-score (v13, hybrid threshold + noise): {f1_v13:.4f}")
+
+# v14：僅噪聲增強 v8（固定 2 km 閾值）
+train_noisy['Predicted_Onshore_Offshore_v14'] = train_noisy.apply(
+    lambda row: classify_location_base(row['Latitude'], row['Longitude'], coastline, land, 2), axis=1
+)
+predicted_labels_v14 = train_noisy['Predicted_Onshore_Offshore_v14'].dropna()
+f1_v14 = f1_score(true_labels, predicted_labels_v14, average='weighted')
+print(f"訓練數據 F1-score (v14, noise-enhanced v8): {f1_v14:.4f}")
+
+# 檢查標籤分佈，確認預測結果是否合理
+print("訓練數據標籤分佈（真實標籤）：", Counter(train_clean['Onshore/Offshore'].apply(convert_label).dropna()))
+print("訓練數據標籤分佈（預測標籤 v13）：", Counter(train_noisy['Predicted_Onshore_Offshore_v13'].dropna()))
+print("訓練數據標籤分佈（預測標籤 v14）：", Counter(train_noisy['Predicted_Onshore_Offshore_v14'].dropna()))
+
+# 處理測試數據並生成提交檔案
+print("正在處理測試數據...")
+
+# v13：預測測試數據並生成提交檔案
+test['Predicted_Onshore_Offshore_v13'] = test.apply(
+    lambda row: classify_location_v13(row['Latitude'], row['Longitude'], coastline, land), axis=1
+)
+test['Predicted_Onshore_Offshore_v13'] = test['Predicted_Onshore_Offshore_v13'].fillna(
+    submission['Onshore/Offshore']
+).astype(int)  # 填充缺失值並轉為整數
+
+submission_v13 = pd.DataFrame({
+    'index': test.index,
+    'Onshore/Offshore': test['Predicted_Onshore_Offshore_v13']
+})
+submission_v13.to_csv('submission_gis_v13_hybrid_noise.csv', index=False) # 請替換成你的位址
+print("v13 提交檔案已生成：submission_gis_v13_hybrid_noise.csv")
+
+# v14：預測測試數據並生成提交檔案
+test['Predicted_Onshore_Offshore_v14'] = test.apply(
+    lambda row: classify_location_base(row['Latitude'], row['Longitude'], coastline, land, 2), axis=1
+)
+test['Predicted_Onshore_Offshore_v14'] = test['Predicted_Onshore_Offshore_v14'].fillna(
+    submission['Onshore/Offshore']
+).astype(int)
+
+submission_v14 = pd.DataFrame({
+    'index': test.index,
+    'Onshore/Offshore': test['Predicted_Onshore_Offshore_v14']
+})
+submission_v14.to_csv('submission_gis_v14_noise_enhanced.csv', index=False)   # # 請替換成你的位址
+print("v14 提交檔案已生成：submission_gis_v14_noise_enhanced.csv")
+```

@@ -41,6 +41,8 @@ This repository contains my **Kaggle Top 1 & 2 winning solutions** for the compe
 ## 📈 Results
 - Generated multiple submission files (e.g., `submission_gis_v13_hybrid_noise.csv`, `submission_gis_v14_noise_enhanced.csv`)
 - Combined Machine Learning + GIS approaches achieved **Top 1 and 2** on both Public and Private Leaderboards.
+<img width="2559" height="1431" alt="image" src="https://github.com/user-attachments/assets/6cee8ccd-7410-481e-b4a9-350ba59026cc" />
+
 
 🙌 Acknowledgements
 Kaggle community & competition organizers
@@ -48,5 +50,6 @@ Kaggle community & competition organizers
 Teammates and collaborators
 
 Libraries: scikit-learn, imbalanced-learn, pandas, xgboost, lightgbm, catboost, seaborn, matplotlib
+
 
 

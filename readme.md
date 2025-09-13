@@ -9,11 +9,13 @@ This repository contains my **Kaggle Top 1 & 2 winning solutions** for the compe
   - **Public LB**: `0.95908` (#1) | `0.93725` (#2)  
   - **Private LB**: `0.94267` (#1) | `0.91539` (#2)
 
+
 ## 📂 Repository Structure
+```
 ├── data/ # Dataset (train.csv, test.csv, etc.)
 ├── submission_machine_learning_in_oil.qmd # Quarto notebook (R + Python)
 ├── README.md # This file
-
+```
 
 ## ⚙️ Methods
 1. **Data Preprocessing**
@@ -46,4 +48,5 @@ Kaggle community & competition organizers
 Teammates and collaborators
 
 Libraries: scikit-learn, imbalanced-learn, pandas, xgboost, lightgbm, catboost, seaborn, matplotlib
+
 

@@ -44,12 +44,11 @@ This repository contains my **Kaggle Top 1 & 2 winning solutions** for the compe
 <img width="2559" height="1431" alt="image" src="https://github.com/user-attachments/assets/6cee8ccd-7410-481e-b4a9-350ba59026cc" />
 
 
-🙌 Acknowledgements
-Kaggle community & competition organizers
+## 🙌 Acknowledgements
+- Kaggle community & competition organizers
+- Teammates and collaborators
+- Libraries: scikit-learn, imbalanced-learn, pandas, xgboost, lightgbm, catboost, seaborn, matplotlib
 
-Teammates and collaborators
-
-Libraries: scikit-learn, imbalanced-learn, pandas, xgboost, lightgbm, catboost, seaborn, matplotlib
 
 
 
